@@ -1,0 +1,155 @@
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.12.0/firebase-app.js";
+import { getDatabase, ref, push, onChildAdded, set, get, remove, onValue } from "https://www.gstatic.com/firebasejs/12.12.0/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyB-skHrH1xF0mHcbcFKoZlrXNeeioFCKSw",
+  authDomain: "glasses-system.firebaseapp.com",
+  projectId: "glasses-system",
+  databaseURL: "https://glasses-system-default-rtdb.firebaseio.com"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+const uid = Math.random().toString(36).slice(2);
+let name = "";
+let roomId = "";
+
+// 👉 初始给一个空对象，避免 undefined 崩溃
+let playersRef = null;
+let statusRef = null;
+let msgRef = null;
+let myRef = null;
+
+const diceEmoji = ["⚀","⚁","⚂","⚃","⚄","⚅"];
+
+// ====== 进入游戏 ======
+window.enterGame = async function(){
+  const input = document.getElementById("nameInput").value.trim();
+  if(!input){alert("请输入名字");return;}
+  name = input;
+
+  let room = prompt("请输入房间号（1-10）");
+  if(!room || room < 1 || room > 10){
+    alert("房间号必须是1-10");
+    return;
+  }
+
+  roomId = "room"+room;
+
+  playersRef = ref(db, `dice/rooms/${roomId}/players`);
+  statusRef  = ref(db, `dice/rooms/${roomId}/status`);
+  msgRef     = ref(db, `dice/rooms/${roomId}/messages`);
+  myRef      = ref(db, `dice/rooms/${roomId}/players/${uid}`);
+
+  // ===== 房间人数检测 =====
+  const snap = await get(playersRef);
+  const players = snap.val() || {};
+  const count = Object.keys(players).length;
+
+  if(count >= 2){
+    alert("房间已满（2人）");
+    return;
+  }
+
+  await set(myRef, {name});
+
+  document.getElementById("login").style.display="none";
+  document.getElementById("app").style.display="flex";
+
+  // 人数监听
+  onValue(playersRef, snap=>{
+    const data = snap.val() || {};
+    const count = Object.keys(data).length;
+    document.title = `🍺 房间${room}（${count}/2）`;
+  });
+
+  // 开骰监听
+  onValue(statusRef, async (snap)=>{
+    const status = snap.val();
+    const box = document.getElementById("otherDice");
+
+    if(!status || !status.opened){
+      box.innerHTML = "？？？";
+      return;
+    }
+
+    const snap2 = await get(playersRef);
+    const data = snap2.val() || {};
+
+    box.innerHTML = "";
+
+    for(let id in data){
+      if(data[id].name===name) continue;
+      if(!data[id].dice) continue;
+
+      data[id].dice.forEach(d=>{
+        const s=document.createElement("span");
+        s.className="dice";
+        s.textContent=diceEmoji[d-1];
+        box.appendChild(s);
+      });
+    }
+  });
+
+  // 聊天监听
+  onChildAdded(msgRef, d=>{
+    const msg=d.val();
+    const div=document.createElement("div");
+    div.className="msg";
+    div.textContent=msg.name+"："+msg.text;
+    document.getElementById("messages").appendChild(div);
+  });
+};
+
+// ====== 骰子 ======
+function rollDice(){
+  return Array.from({length:5}, ()=>Math.floor(Math.random()*6)+1);
+}
+
+window.startGame = async function(){
+  if(!playersRef) return alert("请先进入房间");
+
+  await remove(playersRef);
+  await set(statusRef, {opened:false});
+  push(msgRef,{name, text:"开始新一局"});
+};
+
+window.roll = async function(){
+  if(!myRef) return alert("请先进入房间");
+
+  const dice = rollDice();
+  await set(myRef, {name, dice});
+  showMyDice(dice);
+  push(msgRef,{name, text:"重新摇骰子"});
+};
+
+function showMyDice(dice){
+  const box = document.getElementById("myDice");
+  box.innerHTML="";
+  dice.forEach(d=>{
+    const s=document.createElement("span");
+    s.className="dice";
+    s.textContent=diceEmoji[d-1];
+    box.appendChild(s);
+  });
+}
+
+window.openDice = async function(){
+  if(!statusRef) return alert("请先进入房间");
+
+  await set(statusRef, {opened:true});
+  push(msgRef,{name, text:"已开！"});
+};
+
+// ====== 聊天 ======
+window.sendMsg=function(){
+  if(!msgRef) return alert("请先进入房间");
+
+  const input=document.getElementById("msgInput");
+  if(!input.value.trim()) return;
+  push(msgRef,{name,text:input.value});
+  input.value="";
+};
+</script>
