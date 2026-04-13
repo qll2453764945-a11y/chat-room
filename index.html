@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🍺 小酒馆骰子</title>
+
+<style>
+body{margin:0;background:#2b1d14;color:#f5e6c8;font-family:-apple-system}
+#app{max-width:900px;margin:0 auto;height:100vh;display:flex;flex-direction:column}
+
+#login{position:fixed;inset:0;background:#2b1d14;display:flex;justify-content:center;align-items:center;flex-direction:column}
+#login input{padding:10px;margin:10px;border:none;border-radius:6px}
+#login button{padding:10px 20px;background:#6b4a2b;color:#fff;border:none;border-radius:6px}
+
+.room-list{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:20px;width:80%}
+.room{padding:10px;background:#3a2618;text-align:center;border-radius:6px;cursor:pointer}
+
+#top{padding:20px;background:#3a2618;border-bottom:2px solid #5a3b28}
+.title{margin-bottom:10px;font-size:18px;color:#d9b97a}
+.dice{font-size:50px;margin:4px}
+
+#controls{padding:15px;text-align:center;background:#24170f}
+button{padding:10px 16px;margin:5px;border:none;border-radius:6px}
+#openBtn{width:80px;height:80px;border-radius:50%;background:#b22222;color:#fff;font-size:22px}
+
+#messages{flex:1;overflow:auto;padding:15px;font-size:14px}
+.msg{margin:6px 0}
+
+#inputBox{display:flex;padding:10px;background:#1c120c}
+#inputBox input{flex:1;padding:10px;border:none;border-radius:6px}
+#inputBox button{margin-left:10px;background:#6b4a2b;color:#fff}
+</style>
+</head>
+
+<body>
+
+<div id="login">
+<h2>🍺 进入酒馆</h2>
+<input id="nameInput" placeholder="输入你的名字">
+<button onclick="showRooms()">下一步</button>
+
+<div id="roomSelect" style="display:none">
+<h3>选择房间</h3>
+<div class="room-list" id="roomList"></div>
+</div>
+</div>
+
+<div id="app" style="display:none">
+
+<div id="top">
+<div class="title">你的点数：</div>
+<div id="myDice"></div>
+
+<div class="title">对方点数：</div>
+<div id="otherDice">？？？</div>
+</div>
+
+<div id="controls">
+<button onclick="startGame()">开始游戏</button>
+<button onclick="roll()">摇骰子</button>
+<button id="openBtn" onclick="openDice()">开！</button>
+</div>
+
+<div id="messages"></div>
+
+<div id="inputBox">
+<input id="msgInput" placeholder="叫骰..." />
+<button onclick="sendMsg()">发送</button>
+</div>
+
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.12.0/firebase-app.js";
+import { getDatabase, ref, push, onChildAdded, set, get, remove, onValue, onDisconnect } from "https://www.gstatic.com/firebasejs/12.12.0/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyB-skHrH1xF0mHcbcFKoZlrXNeeioFCKSw",
+  authDomain: "glasses-system.firebaseapp.com",
+  projectId: "glasses-system",
+  databaseURL: "https://glasses-system-default-rtdb.firebaseio.com"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+const uid = Math.random().toString(36).slice(2);
+let name = "";
+let room = "";
+
+let playersRef, statusRef, myRef, msgRef;
+
+const diceEmoji = ["⚀","⚁","⚂","⚃","⚄","⚅"];
+const TIME_LIMIT = 60000; // ✅ 60秒
+
+// 显示房间
+window.showRooms = function(){
+  const input = document.getElementById("nameInput").value.trim();
+  if(!input){alert("请输入名字");return;}
+  name = input;
+
+  document.getElementById("roomSelect").style.display="block";
+
+  const list = document.getElementById("roomList");
+  list.innerHTML="";
+
+  for(let i=1;i<=10;i++){
+    const r = "room"+i;
+    const div=document.createElement("div");
+    div.className="room";
+
+    const roomPlayersRef = ref(db, `dice/rooms/${r}/players`);
+
+    onValue(roomPlayersRef, snap=>{
+      const data = snap.val();
+      const now = Date.now();
+
+      const count = data
+        ? Object.values(data).filter(p => now - (p.lastActive || 0) < TIME_LIMIT).length
+        : 0;
+
+      div.textContent=`房间 ${i}（${count}/2）`;
+    });
+
+    div.onclick=()=>enterRoom(r);
+    list.appendChild(div);
+  }
+};
+
+// 进入房间
+window.enterRoom = async function(r){
+  const roomPlayersRef = ref(db, `dice/rooms/${r}/players`);
+  const snap = await get(roomPlayersRef);
+  const data = snap.val();
+  const now = Date.now();
+
+  const count = data
+    ? Object.values(data).filter(p => now - (p.lastActive || 0) < TIME_LIMIT).length
+    : 0;
+
+  if(count >= 2){
+    alert("房间已满！");
+    return;
+  }
+
+  room = r;
+
+  playersRef = ref(db, `dice/rooms/${room}/players`);
+  statusRef = ref(db, `dice/rooms/${room}/status`);
+  myRef = ref(db, `dice/rooms/${room}/players/${uid}`);
+  msgRef = ref(db, `dice/rooms/${room}/messages`);
+
+  await set(myRef, {
+    name,
+    lastActive: Date.now()
+  });
+
+  onDisconnect(myRef).remove();
+
+  // 心跳
+  setInterval(()=>{
+    set(ref(db, `dice/rooms/${room}/players/${uid}/lastActive`), Date.now());
+  }, 5000);
+
+  document.getElementById("login").style.display="none";
+  document.getElementById("app").style.display="flex";
+
+  initListeners();
+};
+
+// 监听
+function initListeners(){
+
+  const roomPlayersRef = ref(db, `dice/rooms/${room}/players`);
+
+  // 房间清零自动重置
+  onValue(roomPlayersRef, async (snap)=>{
+    const data = snap.val();
+    const now = Date.now();
+
+    const alive = data
+      ? Object.values(data).filter(p => now - (p.lastActive || 0) < TIME_LIMIT)
+      : [];
+
+    if(alive.length === 0){
+      await remove(ref(db, `dice/rooms/${room}`));
+    }
+  });
+
+  onValue(statusRef, async (snap)=>{
+    const status = snap.val();
+    const box = document.getElementById("otherDice");
+
+    if(!status || !status.opened){
+      box.innerHTML = "？？？";
+      return;
+    }
+
+    const snap2 = await get(playersRef);
+    const data = snap2.val();
+
+    box.innerHTML = "";
+
+    for(let id in data){
+      if(data[id].name===name) continue;
+      if(!data[id].dice) continue;
+
+      data[id].dice.forEach(d=>{
+        const s=document.createElement("span");
+        s.className="dice";
+        s.textContent=diceEmoji[d-1];
+        box.appendChild(s);
+      });
+    }
+  });
+
+  onChildAdded(msgRef, d=>{
+    const msg=d.val();
+    const div=document.createElement("div");
+    div.className="msg";
+    div.textContent=msg.name+"："+msg.text;
+    document.getElementById("messages").appendChild(div);
+  });
+}
+
+function rollDice(){
+  return Array.from({length:5}, ()=>Math.floor(Math.random()*6)+1);
+}
+
+window.startGame = async function(){
+  await remove(playersRef);
+  await remove(msgRef);
+  await set(statusRef, {opened:false});
+  push(msgRef,{name, text:"开始新一局"});
+};
+
+window.roll = async function(){
+  const dice = rollDice();
+  await set(myRef, {name, dice, lastActive: Date.now()});
+  showMyDice(dice);
+  push(msgRef,{name, text:"重新摇骰子"});
+};
+
+function showMyDice(dice){
+  const box = document.getElementById("myDice");
+  box.innerHTML="";
+  dice.forEach(d=>{
+    const s=document.createElement("span");
+    s.className="dice";
+    s.textContent=diceEmoji[d-1];
+    box.appendChild(s);
+  });
+}
+
+window.openDice = async function(){
+  await set(statusRef, {opened:true});
+  push(msgRef,{name, text:"已开！"});
+};
+
+window.sendMsg=function(){
+  const input=document.getElementById("msgInput");
+  if(!input.value.trim()) return;
+  push(msgRef,{name,text:input.value});
+  input.value="";
+};
+</script>
+
+</body>
+</html>
